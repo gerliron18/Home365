@@ -1,0 +1,224 @@
+{
+  "database": "property_management.db",
+  "description": "Property Management Database - Contains information about property owners, properties, units, and leases",
+  "tables": [
+    {
+      "name": "Owners",
+      "description": "Property owners and their information",
+      "columns": [
+        {
+          "name": "owner_id",
+          "type": "INTEGER",
+          "description": "Unique identifier for the owner (Primary Key)"
+        },
+        {
+          "name": "owner_name",
+          "type": "TEXT",
+          "description": "Name of the owner or holding company (e.g., LLC1, LLC2)"
+        },
+        {
+          "name": "contact_email",
+          "type": "TEXT",
+          "description": "Email address of the owner"
+        },
+        {
+          "name": "contact_phone",
+          "type": "TEXT",
+          "description": "Phone number of the owner"
+        }
+      ],
+      "primary_key": "owner_id",
+      "foreign_keys": []
+    },
+    {
+      "name": "Properties",
+      "description": "Real estate properties managed by the company",
+      "columns": [
+        {
+          "name": "property_id",
+          "type": "INTEGER",
+          "description": "Unique identifier for the property (Primary Key)"
+        },
+        {
+          "name": "owner_id",
+          "type": "INTEGER",
+          "description": "Foreign key referencing Owners table"
+        },
+        {
+          "name": "address",
+          "type": "TEXT",
+          "description": "Full street address of the property"
+        },
+        {
+          "name": "city",
+          "type": "TEXT",
+          "description": "City where the property is located"
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "description": "State abbreviation (e.g., PA, AZ, CA)"
+        },
+        {
+          "name": "zip_code",
+          "type": "TEXT",
+          "description": "ZIP or postal code"
+        },
+        {
+          "name": "property_type",
+          "type": "TEXT",
+          "description": "Type of property (Single Family, Multi-Family, Commercial)"
+        },
+        {
+          "name": "purchase_date",
+          "type": "TEXT",
+          "description": "Date when the property was purchased (ISO format)"
+        },
+        {
+          "name": "purchase_price",
+          "type": "REAL",
+          "description": "Original purchase price in USD"
+        },
+        {
+          "name": "is_active",
+          "type": "INTEGER",
+          "description": "Whether the property is actively managed (1=active, 0=inactive)"
+        }
+      ],
+      "primary_key": "property_id",
+      "foreign_keys": [
+        {
+          "column": "owner_id",
+          "references": "Owners(owner_id)"
+        }
+      ]
+    },
+    {
+      "name": "Units",
+      "description": "Individual rental units within properties",
+      "columns": [
+        {
+          "name": "unit_id",
+          "type": "INTEGER",
+          "description": "Unique identifier for the unit (Primary Key)"
+        },
+        {
+          "name": "property_id",
+          "type": "INTEGER",
+          "description": "Foreign key referencing Properties table"
+        },
+        {
+          "name": "unit_number",
+          "type": "TEXT",
+          "description": "Unit number or identifier (e.g., Unit A, Unit 101)"
+        },
+        {
+          "name": "bedrooms",
+          "type": "INTEGER",
+          "description": "Number of bedrooms"
+        },
+        {
+          "name": "bathrooms",
+          "type": "REAL",
+          "description": "Number of bathrooms (can be fractional like 1.5)"
+        },
+        {
+          "name": "square_feet",
+          "type": "INTEGER",
+          "description": "Total square footage of the unit"
+        },
+        {
+          "name": "monthly_rent",
+          "type": "REAL",
+          "description": "Current monthly rent amount in USD"
+        }
+      ],
+      "primary_key": "unit_id",
+      "foreign_keys": [
+        {
+          "column": "property_id",
+          "references": "Properties(property_id)"
+        }
+      ]
+    },
+    {
+      "name": "Leases",
+      "description": "Lease agreements for rental units",
+      "columns": [
+        {
+          "name": "lease_id",
+          "type": "INTEGER",
+          "description": "Unique identifier for the lease (Primary Key)"
+        },
+        {
+          "name": "unit_id",
+          "type": "INTEGER",
+          "description": "Foreign key referencing Units table"
+        },
+        {
+          "name": "tenant_name",
+          "type": "TEXT",
+          "description": "Name of the tenant"
+        },
+        {
+          "name": "start_date",
+          "type": "TEXT",
+          "description": "Lease start date (ISO format)"
+        },
+        {
+          "name": "end_date",
+          "type": "TEXT",
+          "description": "Lease end date (ISO format)"
+        },
+        {
+          "name": "monthly_rent",
+          "type": "REAL",
+          "description": "Monthly rent amount for this lease in USD"
+        },
+        {
+          "name": "security_deposit",
+          "type": "REAL",
+          "description": "Security deposit amount in USD"
+        },
+        {
+          "name": "is_active",
+          "type": "INTEGER",
+          "description": "Whether the lease is currently active (1=active, 0=expired)"
+        }
+      ],
+      "primary_key": "lease_id",
+      "foreign_keys": [
+        {
+          "column": "unit_id",
+          "references": "Units(unit_id)"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "description": "One owner can have many properties",
+      "from": "Owners",
+      "to": "Properties",
+      "type": "one-to-many"
+    },
+    {
+      "description": "One property can have many units",
+      "from": "Properties",
+      "to": "Units",
+      "type": "one-to-many"
+    },
+    {
+      "description": "One unit can have multiple leases (over time)",
+      "from": "Units",
+      "to": "Leases",
+      "type": "one-to-many"
+    }
+  ],
+  "business_rules": [
+    "All monetary values are in USD",
+    "Dates are stored in ISO format (YYYY-MM-DD)",
+    "is_active flag indicates current operational status",
+    "For profitability calculations, consider rent income vs purchase price and operating costs"
+  ]
+}

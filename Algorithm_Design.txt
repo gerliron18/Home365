@@ -1,0 +1,603 @@
+================================================================================
+PROPERTY MANAGEMENT CHATBOT - ALGORITHM DESIGN
+High-Level Pseudocode Documentation
+Version 1.0.0
+================================================================================
+
+1. SYSTEM INITIALIZATION
+================================================================================
+
+FUNCTION initialize_system():
+    load_environment_variables()
+    
+    IF database_not_exists THEN
+        RETURN error("Database not found")
+    END IF
+    
+    IF api_key_not_configured THEN
+        RETURN error("API key required")
+    END IF
+    
+    schema_metadata = load_schema_from_json("schema.json")
+    database_manager = initialize_database(database_path)
+    llm = initialize_gemini_model(api_key, model_name)
+    
+    agent = create_react_agent(
+        database_manager,
+        llm,
+        schema_metadata,
+        max_retries=3
+    )
+    
+    RETURN agent
+END FUNCTION
+
+
+2. AUTHENTICATION ALGORITHM
+================================================================================
+
+FUNCTION authenticate_user():
+    // Two-step authentication process
+    
+    // Step 1: Role Selection
+    DISPLAY "Select role: 1=admin, 2=owner, 3=viewer"
+    role = GET_USER_INPUT()
+    
+    IF role == "owner" THEN
+        DISPLAY "Select owner: 1-5 (LLC1-LLC5)"
+        owner_id = GET_USER_INPUT()
+    ELSE
+        owner_id = NULL
+    END IF
+    
+    // Step 2: Password Authentication
+    expected_password = get_password_for_role(role, owner_id)
+    DISPLAY "Password hint: " + expected_password
+    
+    FOR attempt = 1 TO 3 DO
+        password = GET_HIDDEN_INPUT()  // Using getpass - not visible
+        
+        IF password.lowercase() == expected_password THEN
+            user_context = create_user_context(role, owner_id)
+            DISPLAY_WELCOME_MESSAGE(role, owner_id)
+            RETURN user_context
+        ELSE
+            DISPLAY "Incorrect password"
+        END IF
+    END FOR
+    
+    RETURN authentication_failed()
+END FUNCTION
+
+
+3. DYNAMIC SCHEMA PROCESSING ALGORITHM
+================================================================================
+
+// Enables processing ANY table structure provided in schema.json
+
+FUNCTION load_schema_metadata(schema_file):
+    schema_data = parse_json(schema_file)
+    metadata = {}
+    
+    FOR EACH table IN schema_data["tables"] DO
+        table_info = {
+            "name": table["name"],
+            "description": table["description"],
+            "columns": [],
+            "relationships": []
+        }
+        
+        // Extract column information
+        FOR EACH column IN table["columns"] DO
+            column_info = {
+                "name": column["name"],
+                "type": column["type"],
+                "description": column["description"],
+                "constraints": column["constraints"]
+            }
+            table_info["columns"].append(column_info)
+        END FOR
+        
+        // Extract relationships (foreign keys)
+        FOR EACH fk IN table["foreign_keys"] DO
+            relationship = {
+                "from_column": fk["column"],
+                "to_table": fk["references"]["table"],
+                "to_column": fk["references"]["column"]
+            }
+            table_info["relationships"].append(relationship)
+        END FOR
+        
+        metadata[table["name"]] = table_info
+    END FOR
+    
+    RETURN metadata
+END FUNCTION
+
+FUNCTION generate_schema_description(metadata):
+    // Convert metadata to natural language for LLM
+    description = ""
+    
+    FOR EACH table IN metadata DO
+        description += "Table: " + table["name"] + "\n"
+        description += "Purpose: " + table["description"] + "\n"
+        description += "Columns:\n"
+        
+        FOR EACH column IN table["columns"] DO
+            description += "  - " + column["name"] + 
+                          " (" + column["type"] + "): " + 
+                          column["description"] + "\n"
+        END FOR
+        
+        IF table["relationships"].not_empty() THEN
+            description += "Relationships:\n"
+            FOR EACH rel IN table["relationships"] DO
+                description += "  - " + rel["from_column"] + 
+                              " links to " + rel["to_table"] + 
+                              "." + rel["to_column"] + "\n"
+            END FOR
+        END IF
+        
+        description += "\n"
+    END FOR
+    
+    RETURN description
+END FUNCTION
+
+
+4. MAIN QUERY PROCESSING ALGORITHM (ReAct Agent)
+================================================================================
+
+FUNCTION process_query(user_query, user_context, agent):
+    
+    // Initialize conversation memory
+    enhanced_query = agent.memory.enhance_query(user_query)
+    
+    // Initialize agent state
+    state = {
+        "user_query": enhanced_query,
+        "user_context": user_context,
+        "sql_query": NULL,
+        "sql_result": NULL,
+        "final_answer": NULL,
+        "retry_count": 0,
+        "error_log": [],
+        "schema_metadata": agent.schema_metadata
+    }
+    
+    // Execute ReAct loop (Reason-Act pattern)
+    WHILE state["retry_count"] < MAX_RETRIES DO
+        
+        // STEP 1: Determine Query Type
+        is_data_query, conversational_response = classify_query(user_query)
+        
+        IF NOT is_data_query THEN
+            state["final_answer"] = conversational_response
+            BREAK
+        END IF
+        
+        // STEP 2: Authorization Check (RBAC Intent Validation)
+        is_authorized, denial_message = validate_authorization(
+            user_query, 
+            user_context
+        )
+        
+        IF NOT is_authorized THEN
+            state["final_answer"] = denial_message
+            BREAK
+        END IF
+        
+        // STEP 3: Generate SQL Query
+        schema_description = generate_schema_description(state["schema_metadata"])
+        
+        sql_query = llm.generate_sql(
+            query=enhanced_query,
+            schema=schema_description,
+            user_context=user_context
+        )
+        
+        state["sql_query"] = sql_query
+        
+        // STEP 4: Validate SQL (Security)
+        is_valid, error_message = validate_sql_security(sql_query)
+        
+        IF NOT is_valid THEN
+            state["error_log"].append(error_message)
+            state["retry_count"] += 1
+            CONTINUE  // Retry
+        END IF
+        
+        // STEP 5: Apply RBAC Filters
+        filtered_sql = apply_rbac_filters(sql_query, user_context)
+        state["sql_query"] = filtered_sql
+        
+        // STEP 6: Execute SQL
+        TRY
+            result = database.execute(filtered_sql)
+            state["sql_result"] = result
+        CATCH error
+            state["error_log"].append(error)
+            state["retry_count"] += 1
+            CONTINUE  // Retry
+        END TRY
+        
+        // STEP 7: Generate Natural Language Answer
+        answer = llm.generate_answer(
+            query=user_query,
+            sql_query=filtered_sql,
+            sql_result=result
+        )
+        
+        // STEP 8: Validate Answer (Hallucination Detection)
+        is_valid, confidence, warning = validate_answer(answer, result)
+        
+        IF NOT is_valid AND confidence < 0.25 THEN
+            answer += "\n" + warning
+        END IF
+        
+        state["final_answer"] = answer
+        BREAK
+    END WHILE
+    
+    // If max retries exceeded
+    IF state["final_answer"] == NULL THEN
+        state["final_answer"] = "Unable to generate answer. Please rephrase."
+    END IF
+    
+    // Save to conversation memory
+    agent.memory.add_interaction(
+        query=user_query,
+        sql_query=state["sql_query"],
+        result=state["sql_result"],
+        answer=state["final_answer"]
+    )
+    
+    RETURN state
+END FUNCTION
+
+
+5. RBAC (ROLE-BASED ACCESS CONTROL) ALGORITHM
+================================================================================
+
+FUNCTION apply_rbac_filters(sql_query, user_context):
+    
+    // Strip trailing semicolons to prevent syntax errors
+    sql_query = sql_query.strip().rstrip(';').strip()
+    
+    // Only apply filters for 'owner' role
+    IF user_context.role != "owner" THEN
+        RETURN sql_query
+    END IF
+    
+    // Check if query involves Properties table
+    IF "FROM PROPERTIES" NOT IN sql_query.uppercase() AND 
+       "JOIN PROPERTIES" NOT IN sql_query.uppercase() THEN
+        RETURN sql_query
+    END IF
+    
+    // Detect table alias (handles both FROM and JOIN)
+    alias_pattern = REGEX(r'\b(?:FROM|JOIN)\s+PROPERTIES\s+(?:AS\s+)?(\w+)')
+    match = alias_pattern.search(sql_query)
+    
+    IF match THEN
+        table_reference = match.group(1)
+    ELSE
+        table_reference = "Properties"
+    END IF
+    
+    // Build owner filter condition
+    owner_condition = table_reference + ".owner_id = " + user_context.owner_id
+    
+    // Add WHERE clause or append to existing one
+    IF "WHERE" IN sql_query.uppercase() THEN
+        // Inject at beginning of WHERE clause
+        where_position = find_position("WHERE", sql_query)
+        filtered_sql = sql_query[:where_position+5] + 
+                      " " + owner_condition + " AND " + 
+                      sql_query[where_position+5:]
+    ELSE
+        // Add new WHERE clause before ORDER BY, LIMIT, etc.
+        insert_position = find_terminal_clause_position(sql_query)
+        filtered_sql = sql_query[:insert_position] + 
+                      " WHERE " + owner_condition + " " + 
+                      sql_query[insert_position:]
+    END IF
+    
+    RETURN filtered_sql
+END FUNCTION
+
+FUNCTION validate_authorization(user_query, user_context):
+    // Prevent privilege escalation attempts
+    
+    IF user_context.role == "viewer" THEN
+        // Check for specific owner queries
+        IF query_mentions_specific_owner(user_query) THEN
+            RETURN False, "Access denied: Viewers cannot query specific owners"
+        END IF
+    END IF
+    
+    IF user_context.role == "owner" THEN
+        // Check if asking about other owners
+        mentioned_owners = extract_owner_names(user_query)
+        
+        FOR EACH mentioned_owner IN mentioned_owners DO
+            IF mentioned_owner != user_context.owner_name THEN
+                RETURN False, "Access denied: You can only view your own properties"
+            END IF
+        END FOR
+    END IF
+    
+    RETURN True, ""
+END FUNCTION
+
+
+6. ANSWER VALIDATION ALGORITHM (Hallucination Detection)
+================================================================================
+
+FUNCTION validate_answer(llm_answer, sql_result):
+    
+    // Extract numeric values from both sources
+    answer_numbers = extract_numbers_from_text(llm_answer)
+    result_numbers = extract_numbers_from_data(sql_result)
+    
+    // Filter out street addresses (prevent false positives)
+    answer_numbers = filter_street_addresses(answer_numbers)
+    
+    // Compare with tolerance
+    confidence = 1.0
+    warnings = []
+    
+    FOR EACH answer_num IN answer_numbers DO
+        found_match = False
+        
+        FOR EACH result_num IN result_numbers DO
+            // Allow 2% tolerance for rounding
+            IF abs(answer_num - result_num) / result_num <= 0.02 THEN
+                found_match = True
+                BREAK
+            END IF
+        END FOR
+        
+        IF NOT found_match THEN
+            confidence -= 0.3
+            warnings.append("Number " + answer_num + " not found in results")
+        END IF
+    END FOR
+    
+    is_valid = (confidence > 0.5)
+    
+    RETURN is_valid, confidence, warnings
+END FUNCTION
+
+
+7. CONVERSATION MEMORY ALGORITHM
+================================================================================
+
+FUNCTION enhance_query(current_query, conversation_history):
+    
+    // Only enhance for follow-up questions
+    follow_up_patterns = ["what about", "how about", "and", "also"]
+    
+    is_follow_up = False
+    FOR EACH pattern IN follow_up_patterns DO
+        IF current_query.lowercase().startswith(pattern) THEN
+            is_follow_up = True
+            BREAK
+        END IF
+    END FOR
+    
+    IF NOT is_follow_up THEN
+        RETURN current_query  // No enhancement needed
+    END IF
+    
+    // Extract context from recent history (last 3 turns)
+    recent_context = extract_context_from_history(conversation_history[-3:])
+    
+    // Build context prompt
+    context_prompt = ""
+    
+    // Prioritize owner context for follow-ups
+    IF "owner" IN recent_context THEN
+        context_prompt += "Owner: " + recent_context["owner"] + "\n"
+    END IF
+    
+    // Include location only if explicitly mentioned or very short query
+    IF query_mentions_location(current_query) OR len(current_query.split()) <= 3 THEN
+        IF "location" IN recent_context THEN
+            context_prompt += "Location: " + recent_context["location"] + "\n"
+        END IF
+    END IF
+    
+    IF "topic" IN recent_context THEN
+        context_prompt += "Topic: " + recent_context["topic"] + "\n"
+    END IF
+    
+    RETURN context_prompt + current_query
+END FUNCTION
+
+FUNCTION extract_context_from_history(recent_turns):
+    context = {}
+    
+    FOR EACH turn IN recent_turns DO
+        // Extract location mentions
+        IF query_mentions_state(turn.query) THEN
+            context["location"] = extract_state_name(turn.query)
+        END IF
+        
+        // Extract owner mentions (LLC1-5)
+        IF REGEX(r'LLC\d').match(turn.query) THEN
+            context["owner"] = extract_owner_name(turn.query)
+        END IF
+        
+        // Extract topic keywords
+        IF "rent" IN turn.query.lowercase() THEN
+            context["topic"] = "rent"
+        ELSIF "profit" IN turn.query.lowercase() THEN
+            context["topic"] = "profitability"
+        ELSIF "count" IN turn.query.lowercase() THEN
+            context["topic"] = "count"
+        END IF
+    END FOR
+    
+    RETURN context
+END FUNCTION
+
+
+8. ROLE SWITCHING ALGORITHM
+================================================================================
+
+FUNCTION handle_role_switch(agent, current_user_context):
+    
+    // Clear conversation history to prevent context leakage
+    agent.memory.clear_history()
+    
+    // Re-authenticate user
+    new_user_context = authenticate_user()
+    
+    // Display welcome message for new role
+    DISPLAY_WELCOME_MESSAGE(
+        new_user_context.role, 
+        new_user_context.owner_id
+    )
+    
+    RETURN new_user_context
+END FUNCTION
+
+
+9. ERROR HANDLING ALGORITHM
+================================================================================
+
+FUNCTION handle_query_error(error):
+    error_message = error.message
+    
+    // Categorize error and provide user-friendly response
+    IF "RESOURCE_EXHAUSTED" IN error_message OR "429" IN error_message THEN
+        RETURN "API usage limit reached. Please try again later."
+        
+    ELSIF "API_KEY" IN error_message OR "401" IN error_message THEN
+        RETURN "AI service authentication error. Contact administrator."
+        
+    ELSIF "connection" IN error_message.lowercase() OR "timeout" IN error_message.lowercase() THEN
+        RETURN "Network connection issue. Check internet and retry."
+        
+    ELSIF "database" IN error_message.lowercase() THEN
+        RETURN "Database access error. Ensure database file exists."
+        
+    ELSE
+        RETURN "Unexpected error occurred. Please rephrase your question."
+    END IF
+END FUNCTION
+
+
+10. MAIN PROGRAM FLOW
+================================================================================
+
+FUNCTION main():
+    
+    // 1. Initialize System
+    agent = initialize_system()
+    
+    // 2. Authenticate User
+    user_context = authenticate_user()
+    
+    // 3. Main Interaction Loop
+    WHILE True DO
+        user_input = GET_USER_INPUT()
+        
+        // Handle special commands
+        IF user_input IN ["quit", "exit"] THEN
+            BREAK
+            
+        ELSIF user_input == "help" THEN
+            DISPLAY_HELP()
+            CONTINUE
+            
+        ELSIF user_input == "change role" THEN
+            user_context = handle_role_switch(agent, user_context)
+            CONTINUE
+        END IF
+        
+        // Process regular query
+        TRY
+            response = process_query(user_input, user_context, agent)
+            DISPLAY(response["final_answer"])
+            
+        CATCH error
+            friendly_message = handle_query_error(error)
+            DISPLAY(friendly_message)
+        END TRY
+    END WHILE
+    
+    // 4. Cleanup and Exit
+    DISPLAY("Goodbye!")
+END FUNCTION
+
+
+================================================================================
+KEY ALGORITHMIC FEATURES
+================================================================================
+
+1. DYNAMIC SCHEMA PROCESSING
+   - Schema loaded from JSON at runtime
+   - Any table structure supported
+   - Automatic relationship detection
+   - Natural language schema description for LLM
+
+2. ReAct AGENT PATTERN
+   - Reason: Analyze query, check authorization, generate SQL
+   - Act: Execute SQL, validate results
+   - Self-correction: Retry up to MAX_RETRIES on errors
+
+3. MULTI-LAYER SECURITY
+   - Layer 1: Intent validation (pre-SQL)
+   - Layer 2: SQL injection detection
+   - Layer 3: RBAC filtering (dynamic WHERE clauses)
+   - Layer 4: Answer validation (post-processing)
+
+4. CONVERSATION INTELLIGENCE
+   - Context extraction from history
+   - Smart enhancement for follow-up queries
+   - Automatic memory clearing on role switch
+
+5. ROBUST ERROR HANDLING
+   - Graceful degradation
+   - User-friendly messages
+   - Automatic retry logic
+   - Debug mode for technical details
+
+
+================================================================================
+AGENT DESCRIPTION
+================================================================================
+
+TYPE: LangGraph ReAct Agent (Reason-Act pattern)
+
+CAPABILITIES:
+- Natural language to SQL conversion
+- Multi-turn conversation with context awareness
+- Role-based access control enforcement
+- Self-correction with retry mechanism
+- Hallucination detection and prevention
+- Dynamic schema understanding
+
+COMPONENTS:
+- LLM: Google Gemini (for reasoning and generation)
+- State Machine: LangGraph (for flow control)
+- Memory: Conversation context tracking (last 10 turns)
+- Security: Multi-layer validation pipeline
+- Validation: Numeric answer verification
+
+WORKFLOW:
+1. Receive natural language query
+2. Enhance with conversation context
+3. Validate user authorization
+4. Generate SQL using dynamic schema
+5. Apply security filters
+6. Execute on database
+7. Generate natural language response
+8. Validate answer accuracy
+9. Update conversation memory
+
+================================================================================
+END OF ALGORITHM DESIGN
+================================================================================
